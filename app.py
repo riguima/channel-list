@@ -1,9 +1,14 @@
+import asyncio
 import os
 from datetime import datetime, time
+from random import sample
 from time import sleep
+from threading import Thread
 
 from dotenv import load_dotenv
+import pyromod
 from pyrogram.client import Client
+from pyrogram.raw.functions.messages import GetAllChats
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pyrogram import filters
 from sqlalchemy import select
@@ -60,13 +65,55 @@ async def answer(client, callback_query):
     }
     if callback_query.data not in actions:
         with Session() as session:
-            query = select(CategoryModel).where(
-                CategoryModel.name == callback_query.data
-            )
+            data = callback_query.data.split('_')
+            query = select(CategoryModel).where(CategoryModel.name == data[0])
             model = session.scalars(query).first()
-            await channels_by_category(callback_query.message, model.name)
+            if len(data) == 2:
+                await add_channel(
+                    callback_query.message, model.name, int(data[1])
+                )
+            else:
+                await channels_by_category(callback_query.message, model.name)
     else:
         await actions[callback_query.data](client, callback_query.message)
+
+
+@app.on_chat_member_updated()
+async def member_updated(_, update):
+    with Session() as session:
+        query = select(CategoryModel)
+        options = []
+        for model in session.scalars(query).all():
+            options.append(
+                [
+                    InlineKeyboardButton(
+                        model.name,
+                        callback_data=f'{model.name}_{update.chat.id}',
+                    )
+                ]
+            )
+        await app.send_message(
+            update.from_user.id,
+            'Escolha a categoria do seu canal:',
+            reply_markup=InlineKeyboardMarkup(options),
+        )
+
+
+async def add_channel(message, category, chat_id):
+    with Session() as session:
+        query = select(CategoryModel).where(CategoryModel.name == category)
+        chat = await app.get_chat(chat_id)
+        category = session.scalars(query).first()
+        channel = ChannelModel(
+            url=f'http://t.me/{chat.username}',
+            chat_id=int(chat_id),
+            title=chat.title,
+            category=category,
+        )
+        session.add(channel)
+        session.commit()
+        await message.reply('Canal adicionado')
+        await start(None, message)
 
 
 async def participate(_, message):
@@ -113,7 +160,7 @@ async def channels_by_category(message, category):
         )
         options = []
         for model in session.scalars(query).all():
-            options.append([InlineKeyboardButton(model.name, url=model.url)])
+            options.append([InlineKeyboardButton(model.title, url=model.url)])
         options.append(
             [InlineKeyboardButton('Voltar', callback_data='return')]
         )
@@ -124,19 +171,40 @@ async def channels_by_category(message, category):
 
 
 async def alert_channels():
-    await app.send_message('riguima', 'Oi')
+    with Session() as session:
+        query = select(ChannelModel)
+        models = session.scalars(query).all()
+        for model in models:
+            while True:
+                channels = sample(models, k=min(30, len(models) - 1))
+                if model not in channels:
+                    break
+            options = [
+                [InlineKeyboardButton(c.title, url=c.url)]
+                for c in channels
+            ]
+            await app.send_message(
+                model.chat_id,
+                (
+                    '👏 Lista de canais parceiros divulgada para mais de '
+                    f'{len(models)} canais:\n\n👥 Lista para grupos: @divulgap'
+                    'utaria'
+                ),
+                reply_markup=InlineKeyboardMarkup(options),
+            )
 
 
-async def main():
-    await app.start()
+def alert_channels_callback():
     times = [time(hour=0), time(hour=18), time(hour=9)]
     while True:
         for t in times:
             now = datetime.now().time()
             if now.hour == t.hour and now.minute == t.minute:
-                await alert_channels()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(alert_channels())
+                loop.close()
         sleep(60)
-    await app.stop()
 
 
 if __name__ == '__main__':
@@ -144,4 +212,5 @@ if __name__ == '__main__':
         query = select(CategoryModel)
         if not session.scalars(query).all():
             create_categories()
-    app.run(main())
+    Thread(target=alert_channels_callback).start()
+    app.run()

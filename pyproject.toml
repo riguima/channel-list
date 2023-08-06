@@ -12,6 +12,7 @@ pyrogram = "^2.0.106"
 tgcrypto = "^1.2.5"
 python-dotenv = "^1.0.0"
 sqlalchemy = "^2.0.19"
+pyromod = "^2.0.0"
 
 
 [build-system]
