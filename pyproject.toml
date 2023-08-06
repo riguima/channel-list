@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "channel-list"
+version = "0.1.0"
+description = ""
+authors = ["Richard Alexsander"]
+readme = "README.md"
+packages = [{include = "channel_list"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pyrogram = "^2.0.106"
+tgcrypto = "^1.2.5"
+python-dotenv = "^1.0.0"
+sqlalchemy = "^2.0.19"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
