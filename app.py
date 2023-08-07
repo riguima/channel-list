@@ -210,7 +210,7 @@ async def participate(_, message):
                     InlineKeyboardButton(
                         'Escolha um canal',
                         url=(
-                            'http://t.me/riguima_channel_list_bot?startchannel'
+                            f'http://t.me/{os.environ["BOT_NAME"]}?startchannel'
                             '&admin=post_messages+edit_messages+delete_message'
                             's+invite_users+pin_messages+manager_chat'
                         ),
