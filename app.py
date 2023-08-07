@@ -63,7 +63,34 @@ async def answer(client, callback_query):
         'channels': channels,
         'return': start,
     }
-    if callback_query.data not in actions:
+    if 'admin_code' in callback_query.data:
+        data = callback_query.data.split('_')[2:]
+        answer_message = await callback_query.message.chat.ask(
+            'Digite o código de verificação de admin:'
+        )
+        if answer_message.text == os.environ['ADMIN_VERIFICATION_CODE']:
+            await choose_category(*[int(o) for o in data])
+        else:
+            await answer_message.reply(
+                'Código inválido',
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                'Digitar novamente',
+                                callback_data=f'admin_code_{"_".join(data)}',
+                            ),
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                'Voltar',
+                                callback_data='return',
+                            ),
+                        ],
+                    ],
+                ),
+            )
+    elif callback_query.data not in actions:
         with Session() as session:
             data = callback_query.data.split('_')
             query = select(CategoryModel).where(CategoryModel.name == data[0])
@@ -80,6 +107,63 @@ async def answer(client, callback_query):
 
 @app.on_chat_member_updated()
 async def member_updated(_, update):
+    minimum_members_count = int(os.environ['MINIMUM_MEMBERS_COUNT'])
+    try:
+        members_count = await app.get_chat_members_count(update.chat.id)
+    except:
+        await app.send_message(
+            update.old_chat_member.invited_by.id,
+            (
+                'Seu canal foi removido dos canais participantes, pois voc'
+                'ê removeu o bot do seu canal '
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton('Voltar', callback_data='return')],
+                ],
+            ),
+        )
+        with Session() as session:
+            query = select(ChannelModel).where(
+                ChannelModel.chat_id == update.chat.id
+            )
+            model = session.scalars(query).first()
+            session.delete(model)
+            session.commit()
+    else:
+        if members_count < minimum_members_count:
+            await app.send_message(
+                update.from_user.id,
+                (
+                    'Você não pode adicionar um canal com menos de '
+                    f'{minimum_members_count} membros por não ser um admin'
+                    ', caso seja um admin coloque o código de admin'
+                ),
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                'Digitar código',
+                                callback_data=(
+                                    f'admin_code_{update.chat.id}_'
+                                    f'{update.from_user.id}'
+                                ),
+                            ),
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                'Voltar',
+                                callback_data='return',
+                            ),
+                        ],
+                    ],
+                )
+            )
+        else:
+            await choose_category(update.chat.id, update.from_user.id)
+
+
+async def choose_category(chat_id, from_user_id):
     with Session() as session:
         query = select(CategoryModel)
         options = []
@@ -88,12 +172,12 @@ async def member_updated(_, update):
                 [
                     InlineKeyboardButton(
                         model.name,
-                        callback_data=f'{model.name}_{update.chat.id}',
+                        callback_data=f'{model.name}_{chat_id}',
                     )
                 ]
             )
         await app.send_message(
-            update.from_user.id,
+            from_user_id,
             'Escolha a categoria do seu canal:',
             reply_markup=InlineKeyboardMarkup(options),
         )
@@ -117,8 +201,9 @@ async def add_channel(message, category, chat_id):
 
 
 async def participate(_, message):
+    minimum_members_count = int(os.environ['MINIMUM_MEMBERS_COUNT'])
     await message.reply(
-        'Seu canal precisa ter pelo menos 100 membros:',
+        f'Seu canal precisa ter pelo menos {minimum_members_count} membros:',
         reply_markup=InlineKeyboardMarkup(
             [
                 [
@@ -131,6 +216,7 @@ async def participate(_, message):
                         ),
                     )
                 ],
+                [InlineKeyboardButton('Voltar', callback_data='return')],
             ],
         ),
     )
@@ -175,8 +261,15 @@ async def alert_channels():
         query = select(ChannelModel)
         models = session.scalars(query).all()
         for model in models:
+            query = select(ChannelModel).where(
+                ChannelModel.category == model.category
+            )
+            same_category = session.scalars(query).all()
             while True:
-                channels = sample(models, k=min(30, len(models) - 1))
+                channels = sample(
+                    same_category,
+                    k=min(30, len(same_category) - 1),
+                )
                 if model not in channels:
                     break
             options = [
