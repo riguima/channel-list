@@ -40,7 +40,7 @@ async def start(_, message):
             'a ter o seu canal divulgado é bem simples, apenas adicione este b'
             'ot como um dos administradores do seu canal e dê as permissões qu'
             'e ele precisa, saiba das permissões nescessárias aqui. https://t.'
-            'me/divulgaputariabotp'
+            'me/divulgaputariabot'
         ),
         reply_markup=InlineKeyboardMarkup(
             [
@@ -104,7 +104,7 @@ async def answer(client, callback_query):
                 await add_channel(
                     callback_query.message, model.name, int(data[1])
                 )
-            elif data[-1] == 'edit':
+            elif data[-1] == 'change':
                 await change_category(
                     callback_query.message, model.name, int(data[1])
                 )
@@ -169,7 +169,11 @@ async def member_updated(_, update):
                 )
             )
         else:
-            await choose_category(update.chat.id, update.from_user.id, 'add')
+            with Session() as session:
+                query = select(ChannelModel).where(ChannelModel.chat_id == update.chat.id)
+                model = session.scalars(query).first()
+                if model is None:
+                    await choose_category(update.chat.id, update.from_user.id, 'add')
 
 
 async def choose_category(chat_id, from_user_id, flag):
@@ -231,7 +235,7 @@ async def add_channel(message, category, chat_id):
                     [
                         InlineKeyboardButton(
                             '#⃣ Categoria do Canal',
-                            callback_data='change_category',
+                            callback_data=f'{category}_{chat_id}_change',
                         ),
                     ],
                     [
@@ -367,7 +371,7 @@ async def alert_channels():
                 (
                     '👏 Lista de canais parceiros divulgada para mais de '
                     f'{len(models)} canais:\n\n👥 Lista para grupos: @divulgap'
-                    'utaria'
+                    'utaria_bot'
                 ),
                 reply_markup=InlineKeyboardMarkup(options),
             )
