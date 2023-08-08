@@ -74,6 +74,8 @@ async def answer(client, callback_query):
             'Digite o código de verificação de admin:'
         )
         if answer_message.text == os.environ['ADMIN_VERIFICATION_CODE']:
+            chat = await app.get_chat(int(data[0]))
+            await send_confirmation_message(chat)
             await choose_category(int(data[0]), int(data[1]), data[2])
         else:
             await answer_message.reply(
@@ -173,7 +175,34 @@ async def member_updated(_, update):
                 query = select(ChannelModel).where(ChannelModel.chat_id == update.chat.id)
                 model = session.scalars(query).first()
                 if model is None:
-                    await choose_category(update.chat.id, update.from_user.id, 'add')
+                    await send_confirmation_message(update.chat)
+                    await choose_category(
+                        update.chat.id,
+                        update.from_user.id,
+                        'add',
+                    )
+
+
+async def send_confirmation_message(chat):
+    await app.send_message(
+        chat.id,
+        (
+            '👏 O bot é um administrador do canal e tem as permissões corretas'
+            f'.\n\n👏 Parabéns, canal {chat.title} adicionado na lista.\n\nPre'
+            'zamos pelo crescimento mútuo, enquanto você cresce também ajuda o'
+            'utros canais a crescerem.'
+        ),
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        'Configurar Meus Canais',
+                        url=f'http://t.me/{os.environ["BOT_NAME"]}'
+                    ),
+                ],
+            ],
+        ),
+    )
 
 
 async def choose_category(chat_id, from_user_id, flag):
@@ -199,25 +228,11 @@ async def choose_category(chat_id, from_user_id, flag):
 async def add_channel(message, category, chat_id):
     chat = await app.get_chat(chat_id)
     try:
-        await app.send_message(
+        confirmation_message = await app.send_message(
             chat_id,
-            (
-                '👏 O bot é um administrador do canal e tem as permissões '
-                f'corretas.\n\n👏 Parabéns, canal {chat.title} adicionado '
-                'na lista.\n\nPrezamos pelo crescimento mútuo, enquanto vo'
-                'cê cresce também ajuda outros canais a crescerem.'
-            ),
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            'Configurar Meus Canais',
-                            url=f'http://t.me/{os.environ["BOT_NAME"]}',
-                        ),
-                    ],
-                ],
-            ),
+            'Mensagem de confirmação',
         )
+        await confirmation_message.delete()
         await message.reply(
             (
                 f'🌐Seu Canal: {chat.title}\n\n• Link: {chat.invite_link}\n• D'
