@@ -1,0 +1,6 @@
+BOT_NAME = "arroba_do_bot"
+BOT_TOKEN = "token_do_bot"
+API_ID = "seu_api_id"
+API_HASH = "seu_api_hash"
+DATABASE_URI = "sqlite:///database.db" # URI do banco de dados SQLAlchemy
+ADMINS = ["username1", "username2"] # Lista com os usernames dos administradores do bot
