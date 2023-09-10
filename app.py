@@ -1,21 +1,21 @@
 import asyncio
 import os
-from datetime import datetime, time, date
+from datetime import date, datetime, time
 from random import sample
-from time import sleep
 from threading import Thread
+from time import sleep
 
-from dotenv import load_dotenv
 import pyromod
-from pyrogram.client import Client
-from pyrogram.raw.functions.messages import GetAllChats
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from dotenv import load_dotenv
 from pyrogram import filters
+from pyrogram.client import Client
+from pyrogram.types import CallbackQuery, Chat, Message
 from sqlalchemy import select
 
-from channel_list.models import ChannelModel, CategoryModel
+from channel_list.config import config
 from channel_list.database import Session
-from channel_list.utils import create_categories
+from channel_list.models import Category, Channel
+from channel_list.utils import create_reply_markup
 
 load_dotenv()
 
@@ -31,94 +31,124 @@ app = Client(
 @app.on_message(filters.command('start'))
 async def start(_, message):
     await message.reply(
-        (
-            'Antes de tudo...\n\n• O seu canal deve ter uma quantidade mínima '
-            f'de {os.environ["MINIMUM_MEMBERS_COUNT"]} membros para participar'
-            ' da lista.\n• Somente o CRIADOR do canal poderá adicionar e admin'
-            'istrar o canal usando esse bot.\n• O canal precisa ser ativo, can'
-            'ais inativos são removido da lista.\n\nComo participar:\n\n👌 Par'
-            'a ter o seu canal divulgado é bem simples, apenas adicione este b'
-            'ot como um dos administradores do seu canal e dê as permissões qu'
-            'e ele precisa, saiba das permissões nescessárias aqui. https://t.'
-            'me/divulgaputariabot'
+        config['messages']['START_MENU'].replace(
+            '{minimum_members_count}', config['MINIMUM_MEMBERS_COUNT']
         ),
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        'Participar',
-                        callback_data='participate',
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        'Canais Participantes',
-                        callback_data='channels',
-                    ),
-                ],
-            ],
+        reply_markup=create_reply_markup(
+            {'Participar': {'callback_data': 'participate'}},
+            {'Canais Participantes': {'callback_data': 'choose_category'}},
         ),
     )
 
 
 @app.on_callback_query()
-async def answer(client, callback_query):
+async def answer(client: Client, callback_query: CallbackQuery) -> None:
     actions = {
         'participate': participate,
-        'channels': channels,
+        'choose_category': choose_category,
         'return': start,
     }
-    if 'admin_code' in callback_query.data:
-        data = callback_query.data.split('_')[2:]
-        answer_message = await callback_query.message.chat.ask(
-            'Digite o código de verificação de admin:'
+    await actions[callback_query.data](client, callback_query.message)
+
+
+@app.on_callback_query(filters.regex('admin_code:.+'))
+async def admin_code(client: Client, callback_query: CallbackQuery) -> None:
+    chat_id, from_user_id, flag = callback_query.data.split(':').split('_')
+    answer_message = await callback_query.message.chat.ask(
+        'Digite o código de verificação de admin:'
+    )
+    if answer_message.text == config['ADMIN_VERIFICATION_CODE']:
+        chat = await app.get_chat(int(chat_id))
+        await send_confirmation_message(chat)
+        await choose_category(int(chat_id), int(from_user_id), flag)
+    else:
+        await answer_message.reply(
+            'Código inválido',
+            reply_markup=create_reply_markup(
+                {
+                    'Digitar novamente': {
+                        'callback_data': 'admin_code_{"_".join(data)}'
+                    },
+                    'Voltar': {'callback_data': 'return'},
+                },
+            ),
         )
-        if answer_message.text == os.environ['ADMIN_VERIFICATION_CODE']:
-            chat = await app.get_chat(int(data[0]))
-            await send_confirmation_message(chat)
-            await choose_category(int(data[0]), int(data[1]), data[2])
-        else:
-            await answer_message.reply(
-                'Código inválido',
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton(
-                                'Digitar novamente',
-                                callback_data=f'admin_code_{"_".join(data)}',
-                            ),
-                        ],
-                        [
-                            InlineKeyboardButton(
-                                'Voltar',
-                                callback_data='return',
-                            ),
-                        ],
-                    ],
+
+
+@app.on_callback_query(filters.regex('add_channel:.+'))
+async def add_channel(client: Client, callback_query: CallbackQuery) -> None:
+    with Session() as session:
+        category_id, chat_id = callback_query.data.split(':').split('_')
+        category = session.get(Category, category_id)
+        chat = await app.get_chat(chat_id)
+        try:
+            confirmation_message = await app.send_message(
+                chat_id, 'Mensagem de confirmação'
+            )
+            await confirmation_message.delete()
+            await callback_query.message.reply(
+                (
+                    f'🌐Seu Canal: {chat.title}\n\n• Link: {chat.invite_link}\n• D'
+                    f'ata Adic.: {date.today().strftime("%d/%m/%Y")}\n• Categoria:'
+                    f' {category.name}\n• Divulgando: ✅ Sim'
+                ),
+                reply_markup=create_reply_markup(
+                    {
+                        '🗣 Divulgando Canal: ✅ Sim': {
+                            'url': f'http://t.me/{config["BOT_NAME"]}'
+                        },
+                        '#⃣ Categoria do Canal': {
+                            'callback_data': f'change_category:{category_id}_{chat_id}'
+                        },
+                        'Voltar': {'callback_data': 'return'},
+                    },
                 ),
             )
-    elif callback_query.data not in actions:
-        with Session() as session:
-            data = callback_query.data.split('_')
-            query = select(CategoryModel).where(CategoryModel.name == data[0])
-            model = session.scalars(query).first()
-            if data[-1] == 'add':
-                await add_channel(
-                    callback_query.message, model.name, int(data[1])
-                )
-            elif data[-1] == 'change':
-                await change_category(
-                    callback_query.message, model.name, int(data[1])
-                )
-            else:
-                await channels_by_category(callback_query.message, model.name)
-    else:
-        await actions[callback_query.data](client, callback_query.message)
+            channel = Channel(
+                url=chat.invite_link,
+                chat_id=int(chat_id),
+                title=chat.title,
+                category=category,
+            )
+            session.add(channel)
+            session.commit()
+        except:
+            await app.leave_chat(int(chat_id))
+            await callback_query.message.reply(
+                (
+                    'Você não definiu todas as permissões necessárias para o b'
+                    f'ot funcionar no canal {chat.title}, veja aqui as permiss'
+                    'ões que o bot precisa para funcionar'
+                ),
+            )
+            await callback_query.message.reply_photo(
+                'permissions.jpg',
+                reply_markup=create_reply_markup(
+                    {'Voltar': {'callback_data': 'return'}}
+                ),
+            )
+
+
+@app.on_callback_query(filters.regex('change_category:.+'))
+async def change_category(
+    client: Client, callback_query: CallbackQuery
+) -> None:
+    with Session() as session:
+        category_id, chat_id = callback_query.data.split(':').split('_')
+        query = select(Channel).where(Channel.chat_id == int(chat_id))
+        model = session.scalars(query).first()
+        category = session.get(Category, int(category_id))
+        model.category = category
+        session.commit()
+        callback_query.message.reply(
+            f'Seu canal agora é da categoria {category}'
+        )
+        await start(client, callback_query.message)
 
 
 @app.on_chat_member_updated()
 async def member_updated(_, update):
-    minimum_members_count = int(os.environ['MINIMUM_MEMBERS_COUNT'])
+    minimum_members_count = int(config['MINIMUM_MEMBERS_COUNT'])
     try:
         members_count = await app.get_chat_members_count(update.chat.id)
     except:
@@ -128,16 +158,12 @@ async def member_updated(_, update):
                 'Seu canal foi removido dos canais participantes, pois voc'
                 'ê removeu o bot do seu canal '
             ),
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [InlineKeyboardButton('Voltar', callback_data='return')],
-                ],
+            reply_markup=create_reply_markup(
+                {'Voltar': {'callback_data': 'return'}}
             ),
         )
         with Session() as session:
-            query = select(ChannelModel).where(
-                ChannelModel.chat_id == update.chat.id
-            )
+            query = select(Channel).where(Channel.chat_id == update.chat.id)
             model = session.scalars(query).first()
             session.delete(model)
             session.commit()
@@ -150,29 +176,22 @@ async def member_updated(_, update):
                     f'{minimum_members_count} membros por não ser um admin'
                     ', caso seja um admin coloque o código de admin'
                 ),
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton(
-                                'Digitar código',
-                                callback_data=(
-                                    f'admin_code_{update.chat.id}_'
-                                    f'{update.from_user.id}_add'
-                                ),
+                reply_markup=create_reply_markup(
+                    {
+                        'Digitar código': {
+                            'callback_data': (
+                                f'admin_code_{update.chat.id}_{update.from_user.id}'
                             ),
-                        ],
-                        [
-                            InlineKeyboardButton(
-                                'Voltar',
-                                callback_data='return',
-                            ),
-                        ],
-                    ],
-                )
+                        },
+                        'Voltar': {'callback_data': 'return'},
+                    },
+                ),
             )
         else:
             with Session() as session:
-                query = select(ChannelModel).where(ChannelModel.chat_id == update.chat.id)
+                query = select(Channel).where(
+                    Channel.chat_id == update.chat.id
+                )
                 model = session.scalars(query).first()
                 if model is None:
                     await send_confirmation_message(update.chat)
@@ -183,7 +202,7 @@ async def member_updated(_, update):
                     )
 
 
-async def send_confirmation_message(chat):
+async def send_confirmation_message(chat: Chat) -> None:
     await app.send_message(
         chat.id,
         (
@@ -192,183 +211,81 @@ async def send_confirmation_message(chat):
             'zamos pelo crescimento mútuo, enquanto você cresce também ajuda o'
             'utros canais a crescerem.'
         ),
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        'Configurar Meus Canais',
-                        url=f'http://t.me/{os.environ["BOT_NAME"]}'
-                    ),
-                ],
-            ],
+        reply_markup=create_reply_markup(
+            {
+                'Configurar Meus Canais': {
+                    'url': f'http://t.me/{config["BOT_NAME"]}'
+                },
+            },
         ),
     )
 
 
-async def choose_category(chat_id, from_user_id, flag):
+async def choose_category(chat_id: int, from_user_id: int, flag: str) -> None:
     with Session() as session:
-        query = select(CategoryModel)
-        options = []
-        for model in session.scalars(query).all():
-            options.append(
-                [
-                    InlineKeyboardButton(
-                        model.name,
-                        callback_data=f'{model.name}_{chat_id}_{flag}',
-                    )
-                ]
-            )
+        options = {}
+        for model in session.scalars(select(Category)).all():
+            options[model.name] = {
+                'callback_data': f'{flag}:{model.id}_{chat_id}'
+            }
         await app.send_message(
             from_user_id,
             'Escolha a categoria do seu canal:',
-            reply_markup=InlineKeyboardMarkup(options),
+            reply_markup=create_reply_markup(options),
         )
 
 
-async def add_channel(message, category, chat_id):
-    chat = await app.get_chat(chat_id)
-    try:
-        confirmation_message = await app.send_message(
-            chat_id,
-            'Mensagem de confirmação',
-        )
-        await confirmation_message.delete()
-        await message.reply(
-            (
-                f'🌐Seu Canal: {chat.title}\n\n• Link: {chat.invite_link}\n• D'
-                f'ata Adic.: {date.today().strftime("%d/%m/%Y")}\n• Categoria:'
-                f' {category}\n• Divulgando: ✅ Sim'
-            ),
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            '🗣 Divulgando Canal: ✅ Sim',
-                            url=f'http://t.me/{os.environ["BOT_NAME"]}',
-                        ),
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            '#⃣ Categoria do Canal',
-                            callback_data=f'{category}_{chat_id}_change',
-                        ),
-                    ],
-                    [
-                        InlineKeyboardButton('Voltar', callback_data='return'),
-                    ],
-                ],
-            ),
-        )
-        with Session() as session:
-            query = select(CategoryModel).where(CategoryModel.name == category)
-            category = session.scalars(query).first()
-            channel = ChannelModel(
-                url=chat.invite_link,
-                chat_id=int(chat_id),
-                title=chat.title,
-                category=category,
-            )
-            session.add(channel)
-            session.commit()
-    except:
-        await app.leave_chat(int(chat_id))
-        await message.reply(
-            (
-                'Você não definiu todas as permissões necessárias para o b'
-                f'ot funcionar no canal {chat.title}, veja aqui as permiss'
-                'ões que o bot precisa para funcionar'
-            ),
-        )
-        await message.reply_photo(
-            'permissions.jpg',
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            'Voltar',
-                            callback_data='return',
-                        ),
-                    ],
-                ],
-            ),
-        )
-
-
-async def change_category(message, category, chat_id):
-    with Session() as session:
-        query = select(ChannelModel).where(ChannelModel.chat_id == chat_id)
-        model = session.scalars(query).first()
-        model.category = category
-        session.commit()
-        message.reply(f'Seu canal agora é da categoria {category}')
-        await start(None, message)
-
-
-async def participate(_, message):
-    minimum_members_count = int(os.environ['MINIMUM_MEMBERS_COUNT'])
+async def participate(_, message: Message) -> None:
+    minimum_members_count = int(config['MINIMUM_MEMBERS_COUNT'])
     await message.reply(
         f'Seu canal precisa ter pelo menos {minimum_members_count} membros:',
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        'Escolha um canal',
-                        url=(
-                            f'http://t.me/{os.environ["BOT_NAME"]}?startchannel'
-                            '&admin=post_messages+edit_messages+delete_message'
-                            's+invite_users+pin_messages+manager_chat'
-                        ),
-                    )
-                ],
-                [InlineKeyboardButton('Voltar', callback_data='return')],
-            ],
+        reply_markup=create_reply_markup(
+            {
+                'Escolha um canal': {
+                    'url': (
+                        f'http://t.me/{config["BOT_NAME"]}?startchannel&'
+                        'admin=post_messages+edit_messages+delete_message'
+                        's+invite_users+pin_messages+manager_chat'
+                    ),
+                },
+                'Voltar': {'callback_data': 'return'},
+            }
         ),
     )
 
 
-async def channels(_, message):
+async def category_menu(_, message: Message) -> None:
     with Session() as session:
-        query = select(CategoryModel)
-        options = []
-        for model in session.scalars(query).all():
-            options.append(
-                [InlineKeyboardButton(model.name, callback_data=model.name)]
-            )
-        options.append(
-            [InlineKeyboardButton('Voltar', callback_data='return')]
-        )
+        options = {}
+        for model in session.scalars(select(Category)).all():
+            options[model.name] = {'callback_data': model.name}
+        options['Voltar'] = {'callback_data': 'return'}
     await message.reply(
         'Escolha uma categoria:',
-        reply_markup=InlineKeyboardMarkup(options),
+        reply_markup=create_reply_markup(options),
     )
 
 
-async def channels_by_category(message, category):
+async def channels_by_category(message: Message, category_id: int) -> None:
     with Session() as session:
-        query = select(ChannelModel).join(CategoryModel).where(
-            CategoryModel.name == category
-        )
-        options = []
+        query = select(Channel).where(Channel.category_id == category_id)
+        options = {}
         models = session.scalars(query).all()
         for model in sample(models, k=min(10, len(models))):
-            options.append([InlineKeyboardButton(model.title, url=model.url)])
-        options.append(
-            [InlineKeyboardButton('Voltar', callback_data='return')]
+            options[model.title] = {'url': model.url}
+        options['Voltar'] = {'callback_data': 'return'}
+        await message.reply(
+            'Canais participantes:',
+            reply_markup=create_reply_markup(options),
         )
-    await message.reply(
-        'Canais participantes:',
-        reply_markup=InlineKeyboardMarkup(options),
-    )
 
 
 async def alert_channels():
     with Session() as session:
-        query = select(ChannelModel)
+        query = select(Channel)
         models = session.scalars(query).all()
         for model in models:
-            query = select(ChannelModel).where(
-                ChannelModel.category == model.category
-            )
+            query = select(Channel).where(Channel.category == model.category)
             same_category = session.scalars(query).all()
             while True:
                 channels = sample(
@@ -377,10 +294,7 @@ async def alert_channels():
                 )
                 if model not in channels:
                     break
-            options = [
-                [InlineKeyboardButton(c.title, url=c.url)]
-                for c in channels
-            ]
+            options = {c.title: {'url': c.url} for c in channels}
             await app.send_message(
                 model.chat_id,
                 (
@@ -388,7 +302,7 @@ async def alert_channels():
                     f'{len(models)} canais:\n\n👥 Lista para grupos: @divulgap'
                     'utaria_bot'
                 ),
-                reply_markup=InlineKeyboardMarkup(options),
+                reply_markup=create_reply_markup(options),
             )
 
 
@@ -406,9 +320,5 @@ def alert_channels_callback():
 
 
 if __name__ == '__main__':
-    with Session() as session:
-        query = select(CategoryModel)
-        if not session.scalars(query).all():
-            create_categories()
     Thread(target=alert_channels_callback).start()
     app.run()

@@ -14,7 +14,13 @@ python-dotenv = "^1.0.0"
 sqlalchemy = "^2.0.19"
 pyromod = "^2.0.0"
 psycopg2-binary = "^2.9.7"
+toml = "^0.10.2"
 
+
+[tool.poetry.group.dev.dependencies]
+blue = "^0.9.1"
+isort = "^5.12.0"
+ruff = "^0.0.287"
 
 [build-system]
 requires = ["poetry-core"]

@@ -1,7 +1,7 @@
 from typing import List
 
-from sqlalchemy import ForeignKey, BigInteger
-from sqlalchemy.orm import Mapped, mapped_column, DeclarativeBase, relationship
+from sqlalchemy import BigInteger, ForeignKey
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from channel_list.database import db
 
